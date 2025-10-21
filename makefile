@@ -35,6 +35,21 @@ indexes: build_idx build_name_index
 	./build_idx merged_data.csv tracks.idx
 	./build_name_index merged_data.csv nameidx
 
+# ---- Descargar dataset desde OneDrive ----
+DATA_URL ?= https://unaledu-my.sharepoint.com/:x:/g/personal/pbueno_unal_edu_co/EfIM_UE78QRDkYMUEX8U4v4BgVCb2LTGrygwzOSdGMk6vQ?download=1
+DATA_PATH ?= merged_data.csv
+
+.PHONY: fetch-data
+fetch-data:
+	@if [ -f "$(DATA_PATH)" ]; then \
+	  echo "$(DATA_PATH) ya existe."; \
+	else \
+	  echo "Descargando dataset desde OneDrive..."; \
+	  curl -L "$(DATA_URL)" -o "$(DATA_PATH)"; \
+	  echo "Archivo descargado en $(DATA_PATH)"; \
+	fi
+
+
 # Limpieza
 clean:
 	rm -f $(MAIN) build_idx build_name_index lookup search_name track_server track_client
