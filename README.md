@@ -1,154 +1,203 @@
-Top Tracks Search (C + Linux)
+# 🎵 Top Tracks Search 🔍
 
-Buscador ultrarrápido de canciones del Top 200 de Spotify usando CSV + índices en disco.
-Permite buscar por:
+<div align="center">
 
-track_id (búsqueda exacta, O(1) promedio)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
+![C](https://img.shields.io/badge/C-00599C?style=for-the-badge&logo=c&logoColor=white)
+![GitHub](https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white)
 
-Nombre / Artista (1–3 palabras, AND; ignora mayúsculas y tildes)
+**Buscador ultrarrápido de canciones del Top 200 de Spotify usando CSV + índices en disco**
 
-La salida es compacta:
+[🚀 Características](#-características) • [📁 Estructura](#-estructura-del-proyecto) • [⚙️ Instalación](#️-instalación) • [🎮 Uso](#-uso) • [🔧 Desarrollo](#-desarrollo)
 
-<track_id> | <track_name> | <artist> | <date> | <region>
+</div>
 
-🧱 Estructura del proyecto
-.
-├─ p1-dataProgram.c      # Programa principal (menú)
-├─ build_idx_trackid.c   # Construye índice por track_id  -> tracks.idx
-├─ build_name_index.c    # Construye índice invertido     -> nameidx/
-├─ lookup_trackid.c      # Lookup simple por track_id (utilidad)
-├─ search_name.c         # Buscador simple por palabras (utilidad)
-├─ track_server.c        # (opcional) servidor FIFO
-├─ track_client.c        # (opcional) cliente FIFO
-├─ Makefile              # Compilación y utilidades
-├─ .gitignore
-└─ README.md
+## ✨ Características
 
-⚙️ Requisitos
+<div align="center">
 
-Linux / WSL
+| 🚀 Velocidad | 🔍 Búsqueda | 💾 Optimización |
+|-------------|-------------|-----------------|
+| **Búsqueda O(1)** por track_id | **1-3 palabras** con operador AND | **Índices en disco** sin cargar dataset completo |
+| **Acceso directo** a registros | **Insensible** a mayúsculas/tildes | **Formato compacto** de salida |
 
-gcc y herramientas de build (build-essential)
+</div>
 
-Dataset: merged_data.csv (no se incluye por tamaño)
+## 🏗️ Estructura del Proyecto
 
-📥 Obtener el dataset
-Opción A — Descargar automáticamente (OneDrive)
+```bash
+top-tracks-search/
+├── 📁 src/
+│   ├── 🎮 p1-dataProgram.c         # Programa principal (menú)
+│   ├── 🗂️ build_idx_trackid.c      # Índice por track_id → tracks.idx
+│   ├── 📖 build_name_index.c       # Índice invertido → nameidx/
+│   ├── 🔍 lookup_trackid.c         # Utilidad: búsqueda por ID
+│   ├── 📝 search_name.c            # Utilidad: búsqueda por palabras
+│   ├── 🖥️ track_server.c           # Servidor FIFO (opcional)
+│   └── 💻 track_client.c           # Cliente FIFO (opcional)
+├── 🔧 Makefile
+├── 📄 README.md
+└── 🚫 .gitignore
+```
 
-Edita el Makefile y coloca tu URL directa en DATA_URL
-(Las URLs de OneDrive deben tener el formato: https://onedrive.live.com/download?resid=...)
+## ⚡ Instalación Rápida
 
-Luego ejecuta:
+### Prerrequisitos
+```bash
+# Ubuntu/Debian
+sudo apt update && sudo apt install build-essential
 
-make fetch-data
+# CentOS/RHEL
+sudo yum groupinstall 'Development Tools'
+```
 
-Opción B — Manual
+### 🛠️ Compilación
+```bash
+# Clona el repositorio
+git clone https://github.com/tu-usuario/top-tracks-search.git
+cd top-tracks-search
 
-Coloca merged_data.csv en la carpeta del proyecto.
-
-Nota: Si cambias el CSV, deberás reconstruir los índices.
-
-🛠️ Compilar
+# Compila todo el proyecto
 make
 
-
-Esto genera el binario principal p1-dataProgram.
-
-Si quieres compilar todas las utilidades (opcional):
+# O compila utilidades específicas
 make build_idx build_name_index lookup search_name
+```
 
-🗂️ Construir índices (una vez)
-# índice por track_id (hash table de direccionamiento abierto)
+## 📥 Dataset
+
+### Opción A: Descarga Automática
+```bash
+# Configura tu URL en Makefile y ejecuta:
+make fetch-data
+```
+
+### Opción B: Descarga Manual
+Coloca `merged_data.csv` en la raíz del proyecto.
+
+> **⚠️ Nota**: Si cambias el CSV, reconstruye los índices con `make indexes`
+
+## 🗂️ Construcción de Índices
+
+```bash
+# Índice hash para track_id (O(1))
 ./build_idx merged_data.csv tracks.idx
 
-# índice invertido (nombre + artista)
+# Índice invertido para nombre/artista
 ./build_name_index merged_data.csv nameidx
 
-
-Puedes automatizar ambos con:
-
+# O automatiza ambos
 make indexes
+```
 
-▶️ Ejecutar
+## 🎮 Uso
+
+### Ejecutar Programa Principal
+```bash
 ./p1-dataProgram
+```
 
+### 🎯 Ejemplos de Búsqueda
 
-Al iniciar, el programa te pedirá las rutas (puedes aceptar los defaults si estás en la carpeta del proyecto):
-
-CSV: merged_data.csv
-
-Índice ID: tracks.idx
-
-Índice texto: nameidx/
-
-Luego verás el menú:
-
-1. Ingresar primer criterio de búsqueda (track_id)
-2. Ingresar segundo criterio de búsqueda (palabra nombre/artista)
-3. Ingresar tercer criterio de búsqueda (si aplica)
-4. Realizar búsqueda
-5. Salir
-
-Ejemplos rápidos
-
-Por ID:
-
+#### 🔎 Por Track ID
+```bash
+# Menú interactivo
 1 → 6rQSrBHf7HLZjtcMZ4S4b0
 4 → Ejecutar
+```
 
-
-Por nombre/artista (palabras, AND):
-
+#### 🎵 Por Nombre/Artista
+```bash
+# Búsqueda con múltiples palabras (AND)
 2 → reggaeton
 3 → lento
 4 → Ejecutar
+```
+
+> **🎉 Característica**: Búsqueda insensible a mayúsculas y tildes → `Beyoncé` == `beyonce`
+
+### 🛠️ Utilidades de Línea de Comandos
+
+```bash
+# Búsqueda directa por track_id
+./lookup merged_data.csv tracks.idx "6rQSrBHf7HLZjtcMZ4S4b0"
+
+# Búsqueda por palabras clave
+./search_name merged_data.csv nameidx "reggaeton" "lento"
+
+# Demo cliente-servidor (opcional)
+./track_server &
+./track_client
+```
+
+## 🧰 Comandos Makefile
+
+| Comando | Descripción |
+|---------|-------------|
+| `make` | Compila el programa principal |
+| `make indexes` | Construye todos los índices |
+| `make fetch-data` | Descarga el dataset |
+| `make clean` | Limpia archivos compilados |
+| `make dist` | Empaqueta para entrega |
+
+## 🔧 Desarrollo
+
+### 🏗️ Arquitectura Interna
+
+#### Búsqueda por Track ID
+```mermaid
+graph LR
+    A[Track ID] --> B[Hash Function]
+    B --> C[tracks.idx]
+    C --> D[Offset]
+    D --> E[CSV Line Read]
+    E --> F[Result]
+```
+
+#### Búsqueda por Texto
+```mermaid
+graph LR
+    A[Palabras] --> B[Normalización]
+    B --> C[nameidx/]
+    C --> D[Intersección Offsets]
+    D --> E[CSV Lines Read]
+    E --> F[Resultados]
+```
+
+### 🐛 Solución de Problemas
+
+| Problema | Solución |
+|----------|----------|
+| `NOT_FOUND` en búsqueda por ID | `make indexes` |
+| `nameidx/` vacío o faltante | `./build_name_index merged_data.csv nameidx` |
+| Descarga OneDrive falla | Verifica URL directa en `Makefile` |
+| CSV muy grande/lento | Asegura que esté en disco local |
+
+## 🤝 Contribuir
+
+¡Las contribuciones son bienvenidas! 
+
+1. 🍴 Haz fork del proyecto
+2. 🌿 Crea una rama feature (`git checkout -b feature/AmazingFeature`)
+3. 💬 Commit tus cambios (`git commit -m 'Add AmazingFeature'`)
+4. 🚀 Push a la rama (`git push origin feature/AmazingFeature`)
+5. 🔄 Abre un Pull Request
 
 
-La búsqueda ignora tildes y mayúsculas (Beyoncé == beyonce).
+## 👨‍💻 Autor
 
-🔎 ¿Qué hace internamente?
+**Tu Nombre**
+pbueno@unal.edu.co
+jyanezf@unal.edu.co
 
-track_id: se calcula hash, se busca en tracks.idx → se obtiene offset → se lee solo esa línea del CSV.
+LinkedIn: www.linkedin.com/in/pabloandresbuenolopez
 
-nombre/artista: se normalizan palabras, se buscan en nameidx/ las listas de offsets y se intersecan → se leen solo esas líneas.
+---
 
-Todo en modo lectura; el CSV no se modifica.
+<div align="center">
 
-🧪 Utilidades (opcionales)
+### ⭐ ¿Te gusta este proyecto? Dale una estrella en GitHub!
 
-./lookup merged_data.csv tracks.idx <track_id>
+**¿Preguntas o sugerencias?** ¡Abre un issue o envíame un mensaje!
 
-./search_name merged_data.csv nameidx <pal1> [pal2] [pal3]
-
-./track_server ... y ./track_client ... (demo FIFO)
-
-🧰 Makefile: comandos útiles
-make               # compila p1-dataProgram
-make indexes       # construye tracks.idx + nameidx/ (requiere merged_data.csv)
-make fetch-data    # descarga merged_data.csv desde OneDrive (configura DATA_URL)
-make clean         # limpia binarios
-make dist LASTNAME1=apellido1 LASTNAME2=apellido2  # empaqueta para entrega
-
-🚑 Problemas frecuentes
-
-“NOT_FOUND” al buscar por ID:
-
-El track_id no existe, o los índices no corresponden al CSV actual. Reconstruye con make indexes.
-
-nameidx/ vacío o faltante:
-
-Ejecuta ./build_name_index merged_data.csv nameidx o make indexes.
-
-Descarga de OneDrive falla:
-
-Verifica que la URL sea de descarga directa (.../download?resid=...).
-
-CSV muy grande / lento:
-
-Los índices están pensados para saltos aleatorios. Asegura que el CSV esté en disco local (no en red).
-
-📄 Licencia
-
-Usa y modifica para fines académicos. Si lo reutilizas, por favor da crédito al autor del repo.
-
-¿Sugerencias o mejoras? ¡Pull requests bienvenidos! ✨
+</div>
