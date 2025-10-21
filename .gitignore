@@ -1,0 +1,20 @@
+# binarios
+p1-dataProgram
+build_idx
+build_name_index
+lookup
+search_name
+track_server
+track_client
+
+# índices y datos grandes
+merged_data.csv
+tracks.idx
+nameidx/
+*.idx
+
+# temporales
+*.o
+*.tmp
+*.swp
+.DS_Store
