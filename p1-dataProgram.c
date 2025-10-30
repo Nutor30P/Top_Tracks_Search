@@ -1,17 +1,17 @@
 /*
-  p1-dataProgram.c
-  Menú interactivo:
-    1) Ingresar primer criterio de búsqueda (track_id exacto)
-    2) Ingresar segundo criterio (palabra para nombre/artista)
-    3) Ingresar tercer criterio (opcional, palabra extra para AND)
-    4) Realizar búsqueda
+  p1-dataProgram.c (rev con delta nameidx + "recientes primero")
+  - Lookup por ID usando tracks.idx (IDX1TRK)
+  - Búsqueda por palabras = base (nameidx/bXX.idx) + delta (nameidx/updates/bXX.log)
+  - Soporta filas nuevas “cortas” (track_id,name,artist,album,duration_ms)
+  - Muestra los resultados más recientes primero en la búsqueda por palabras
+
+  Menú:
+    0) Ingresar track_id exacto
+    1) Ingresar palabra #1 (name/artist)
+    2) Ingresar palabra #2 y #3 (opc)
+    3) Realizar búsqueda
+    A) Agregar track (append CSV + índice)
     5) Salir
-
-  Requisitos previos:
-    - Índice por ID: tracks.idx
-    - Índice por texto: directorio nameidx/ (generado por build_name_index)
-
-  Salida compacta: track_id | track_name | artist | date | region
 */
 
 #define _POSIX_C_SOURCE 200809L
@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
@@ -30,6 +31,8 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include "add_track.h"
 
 /* ---------- Constantes ---------- */
 #define NBKT 256
@@ -117,6 +120,14 @@ static size_t tokenize_unique(const char *norm, char ***out_tokens){
     *out_tokens=tok; return m;
 }
 
+/* ---------- Comparador uint64 (para qsort) ---------- */
+static int cmp_u64(const void *a,const void *b){
+    const uint64_t *pa=(const uint64_t*)a, *pb=(const uint64_t*)b;
+    if (*pa < *pb) return -1;
+    if (*pa > *pb) return 1;
+    return 0;
+}
+
 /* ---------- Hash FNV-1a 64 ---------- */
 static uint64_t fnv1a64(const char *s){
     const uint64_t OFF=1469598103934665603ULL, PR=1099511628211ULL;
@@ -126,7 +137,7 @@ static uint64_t fnv1a64(const char *s){
     return h;
 }
 
-/* ---------- Lectura de postings en nameidx ---------- */
+/* ---------- Lectura postings base ---------- */
 static uint64_t *load_postings(const char *dir, uint64_t h, size_t *out_n){
     int b=(int)(h & (NBKT-1));
     char path[512]; snprintf(path,sizeof(path),"%s/b%02x.idx",dir,b);
@@ -147,8 +158,60 @@ static uint64_t *load_postings(const char *dir, uint64_t h, size_t *out_n){
     }
     fclose(f); *out_n=0; return NULL;
 }
+
+/* ---------- Lectura postings delta (nameidx/updates/bXX.log) ---------- */
+static uint64_t *load_postings_delta(const char *dir, uint64_t h, size_t *out_n){
+    int b=(int)(h & (NBKT-1));
+    char path[512]; snprintf(path,sizeof(path),"%s/updates/b%02x.log",dir,b);
+    FILE *f=fopen(path,"rb"); if(!f){ *out_n=0; return NULL; }
+
+    size_t cap=128, n=0; uint64_t *arr=malloc(cap*sizeof(uint64_t));
+    char *line=NULL; size_t L=0; ssize_t len;
+    while ((len=getline(&line,&L,f))>0){
+        if (len < 18) continue;               /* 16 hex + espacio mínimo */
+        char hex[17]={0};
+        memcpy(hex,line,16);
+        uint64_t hh=0; if (sscanf(hex,"%16" SCNx64, &hh)!=1) continue;
+        if (hh!=h) continue;
+
+        char *sp=strchr(line,' ');
+        if (!sp) continue;
+        uint64_t off=0; if (sscanf(sp+1,"%" SCNu64, &off)!=1) continue;
+
+        if (n==cap){ cap*=2; arr=realloc(arr,cap*sizeof(uint64_t)); }
+        arr[n++]=off;
+    }
+    free(line); fclose(f);
+
+    if (n>1){
+        qsort(arr,n,sizeof(uint64_t),cmp_u64);
+        size_t m=0; for(size_t i=0;i<n;i++){ if (m==0 || arr[i]!=arr[m-1]) arr[m++]=arr[i]; }
+        n=m;
+    }
+    *out_n=n; return arr;
+}
+
+/* ---------- Merge base + delta (ambas ordenadas) ---------- */
+static uint64_t *merge_base_delta(const uint64_t *base,size_t nb,const uint64_t *del,size_t nd,size_t *nout){
+    uint64_t *r=malloc(((nb+nd)?(nb+nd):1)*sizeof(uint64_t));
+    size_t i=0,j=0,k=0;
+    while(i<nb && j<nd){
+        if (base[i] < del[j]) r[k++]=base[i++];
+        else if (del[j] < base[i]) r[k++]=del[j++];
+        else { r[k++]=base[i]; i++; j++; }
+    }
+    while(i<nb) r[k++]=base[i++];
+    while(j<nd) r[k++]=del[j++];
+    *nout=k; return r;
+}
+
+/* ---------- Intersección (decl/proto + def) ---------- */
+static uint64_t *intersect(const uint64_t *a, size_t na,
+                           const uint64_t *b, size_t nb,
+                           size_t *nc);
+
 static uint64_t *intersect(const uint64_t *a,size_t na,const uint64_t *b,size_t nb,size_t *nc){
-    size_t i=0,j=0,cap=(na<nb?na:nb),n=0; uint64_t *c=malloc(cap?cap:1*sizeof(uint64_t));
+    size_t i=0,j=0,cap=(na<nb?na:nb),n=0; uint64_t *c=malloc((cap?cap:1)*sizeof(uint64_t));
     while(i<na && j<nb){ if(a[i]==b[j]){ c[n++]=a[i]; i++; j++; } else if(a[i]<b[j]) i++; else j++; }
     *nc=n; return c;
 }
@@ -178,11 +241,20 @@ static void load_cols_once(const char *csv){
 }
 static void print_compact_line(const char *line){
     char *f[256]={0}; size_t nx=parse_csv_line(line,f,256);
+
     const char *id    = (gcols.track_id   < (int)nx && f[gcols.track_id])   ? f[gcols.track_id]   : "-";
     const char *name  = (gcols.track_name < (int)nx && f[gcols.track_name]) ? f[gcols.track_name] : "-";
     const char *art   = (gcols.artist     < (int)nx && f[gcols.artist])     ? f[gcols.artist]     : "-";
     const char *date  = (gcols.date       < (int)nx && f[gcols.date])       ? f[gcols.date]       : "-";
     const char *reg   = (gcols.region     < (int)nx && f[gcols.region])     ? f[gcols.region]     : "-";
+
+    /* Fila “corta” (5 campos) -> tomar posiciones 0..2 */
+    if (nx == 5) {
+        if (strcmp(id, "-")==0)    id   = f[0];
+        if (strcmp(name, "-")==0)  name = f[1];
+        if (strcmp(art, "-")==0)   art  = f[2];
+    }
+
     printf("%s | %s | %s | %s | %s\n", id, name, art, date, reg);
     free_fields(f,nx);
 }
@@ -219,7 +291,13 @@ static int lookup_by_id(const char *csv, const char *idx, const char *key){
                 if (len>0){
                     char *f[256]={0};
                     size_t nx=parse_csv_line(line,f,256);
-                    if (nx>key_col && f[key_col] && strcmp(f[key_col],key)==0){
+
+                    /* Fallback: si key_col está fuera de rango (fila corta), usar col 0 */
+                    const char *field = NULL;
+                    if (key_col < (uint32_t)nx) field = f[key_col];
+                    else if (nx > 0)            field = f[0];
+
+                    if (field && strcmp(field,key)==0){
                         print_compact_line(line);
                         free_fields(f,nx); found=1; break;
                     }
@@ -236,7 +314,7 @@ static int lookup_by_id(const char *csv, const char *idx, const char *key){
     return found?0:1;
 }
 
-/* ---------- Búsqueda por palabras usando nameidx ---------- */
+/* ---------- Búsqueda por palabras (base + delta) ---------- */
 static int search_by_words(const char *csv, const char *dir, const char **words, int nwords){
     uint64_t *post=NULL; size_t pn=0;
     for(int qi=0; qi<nwords; ++qi){
@@ -249,7 +327,23 @@ static int search_by_words(const char *csv, const char *dir, const char **words,
         for (size_t k=0;k<ntok;k++){ free(toks[k]); }
         free(toks);
 
-        size_t tn=0; uint64_t *tp=load_postings(dir,h,&tn);
+        /* Cargar base + delta y fusionar */
+        size_t tn_base=0, tn_delta=0, tn=0;
+        uint64_t *tp_base  = load_postings(dir, h, &tn_base);
+        uint64_t *tp_delta = load_postings_delta(dir, h, &tn_delta);
+        uint64_t *tp = NULL;
+
+        if (tp_base && tp_delta) {
+            tp = merge_base_delta(tp_base, tn_base, tp_delta, tn_delta, &tn);
+            free(tp_base); free(tp_delta);
+        } else if (tp_base) {
+            tp = tp_base; tn = tn_base;
+        } else if (tp_delta) {
+            tp = tp_delta; tn = tn_delta;
+        } else {
+            tp = NULL; tn = 0;
+        }
+
         if (qi==0){ post=tp; pn=tn; }
         else {
             size_t cn=0; uint64_t *cp=intersect(post,pn,tp,tn,&cn);
@@ -263,9 +357,11 @@ static int search_by_words(const char *csv, const char *dir, const char **words,
     if(!fp){ fprintf(stderr,"CSV: %s\n", strerror(errno)); free(post); return -1; }
     setvbuf(fp,NULL,_IOFBF,4*1024*1024);
 
+    /* Mostrar los más recientes primero (últimos MAX_SHOW) */
     size_t shown=0;
-    for(size_t i=0;i<pn && shown<MAX_SHOW;i++){
-        if (fseeko(fp,(off_t)post[i],SEEK_SET)!=0) continue;
+    size_t start = (pn > MAX_SHOW) ? (pn - MAX_SHOW) : 0;
+    for (ssize_t idx = (ssize_t)pn - 1; idx >= (ssize_t)start && shown < MAX_SHOW; --idx) {
+        if (fseeko(fp,(off_t)post[idx],SEEK_SET)!=0) continue;
         char *line=NULL; size_t cap=0; ssize_t len=getline(&line,&cap,fp);
         if (len>0){ print_compact_line(line); shown++; }
         free(line);
@@ -298,28 +394,73 @@ int main(void){
 
     for(;;){
         printf("\nBienvenido\n");
-        printf("1. Ingresar primer criterio de búsqueda (track_id)\n");
-        printf("2. Ingresar segundo criterio de búsqueda (palabra nombre/artista)\n");
-        printf("3. Ingresar tercer criterio de búsqueda (si aplica)\n");
-        printf("4. Realizar búsqueda\n");
+        printf("0. Ingresar primer criterio de búsqueda (track_id exacto)\n");
+        printf("1. Ingresar segundo criterio de búsqueda (palabra nombre/artista)\n");
+        printf("2. Ingresar tercer criterio de búsqueda (si aplica)\n");
+        printf("3. Realizar búsqueda\n");
+        printf("A. Agregar track (append CSV + índice)\n");
         printf("5. Salir\n> ");
         fflush(stdout);
 
         char opt[16]; if(!fgets(opt,sizeof(opt),stdin)) break;
+
+        char ch = 0;
+        for (int i=0; opt[i]; ++i){
+            if (!isspace((unsigned char)opt[i])) { ch = opt[i]; break; }
+        }
+
+        if (ch=='A' || ch=='a'){
+            char track_id[128], name[256], artist[256], album[256], duration_ms[32];
+
+            printf("track_id: ");        fflush(stdout);
+            if (!fgets(track_id, sizeof(track_id), stdin)) continue;
+            printf("name: ");            fflush(stdout);
+            if (!fgets(name, sizeof(name), stdin)) continue;
+            printf("artist: ");          fflush(stdout);
+            if (!fgets(artist, sizeof(artist), stdin)) continue;
+            printf("album: ");           fflush(stdout);
+            if (!fgets(album, sizeof(album), stdin)) continue;
+            printf("duration_ms (entero en ms): "); fflush(stdout);
+            if (!fgets(duration_ms, sizeof(duration_ms), stdin)) continue;
+
+            for (char *p = track_id; *p; ++p) if (*p=='\n'||*p=='\r'){*p='\0'; break;}
+            for (char *p = name; *p; ++p) if (*p=='\n'||*p=='\r'){*p='\0'; break;}
+            for (char *p = artist; *p; ++p) if (*p=='\n'||*p=='\r'){*p='\0'; break;}
+            for (char *p = album; *p; ++p) if (*p=='\n'||*p=='\r'){*p='\0'; break;}
+            for (char *p = duration_ms; *p; ++p) if (*p=='\n'||*p=='\r'){*p='\0'; break;}
+
+            TrackRecord rec = {
+                .track_id = track_id,
+                .name = name,
+                .artist = artist,
+                .album = album,
+                .duration_ms = duration_ms
+            };
+
+            long ofs = -1;
+            char err[256];
+            if (add_track_and_index(csv, idx, &rec, &ofs, err, sizeof(err))) {
+                printf("OK: agregado en offset %ld\n", ofs);
+            } else {
+                printf("ERROR al agregar: %s\n", err);
+            }
+            continue;
+        }
+
         int o=atoi(opt);
 
-        if (o==1){
+        if (o==0){
             printf("track_id: "); fflush(stdout);
             if (fgets(id,sizeof(id),stdin)) chomp(id);
-        } else if (o==2){
+        } else if (o==1){
             printf("Palabra #1: "); fflush(stdout);
             if (fgets(w1,sizeof(w1),stdin)) chomp(w1);
-        } else if (o==3){
+        } else if (o==2){
             printf("Palabra #2 (opcional): "); fflush(stdout);
             if (fgets(w2,sizeof(w2),stdin)) chomp(w2);
             printf("Palabra #3 (opcional): "); fflush(stdout);
             if (fgets(w3,sizeof(w3),stdin)) chomp(w3);
-        } else if (o==4){
+        } else if (o==3){
             printf("\n=== Resultados ===\n");
             if (id[0]){                     // criterio 1: por ID
                 (void)lookup_by_id(csv, idx, id);
